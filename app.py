@@ -1,8 +1,11 @@
 import gitlab
 import ollama
+import os
+from dotenv import load_dotenv
+load_dotenv()
 
-GITLAB_URL = ''
-TOKEN = ''
+GITLAB_URL = os.getenv("GITLAB_URL")
+TOKEN = os.getenv("GITLAB_TOKEN")
 MODELO_OLLAMA = 'reviewer'
 
 gl = gitlab.Gitlab(GITLAB_URL, private_token=TOKEN)
@@ -15,15 +18,24 @@ mrs = gl.mergerequests.list(
 )
 
 for mr_summary in mrs:
+    skip = False
     project = gl.projects.get(mr_summary.project_id)
     mr = project.mergerequests.get(mr_summary.iid)
-
+    notes = mr.notes.list(get_all=True)
+    for note in notes:
+        if "Ollama" in note.body:
+            skip = True
+    
+    if skip:
+        continue
+            
     print(f"\nAnalisando e comentando no MR #{mr.iid}...")
 
     changes_data = mr.changes()
-    full_review = "**AI Code Review (Staff Engineer Mode)**\n\n"
+    full_review = "**Ollama Code Review**\n\n"
     for change in changes_data['changes']:
         file_path = change['new_path']
+        print(f"Processando {file_path}")
         title = changes_data['title']
         description = changes_data['description']
 
@@ -36,17 +48,27 @@ for mr_summary in mrs:
             model=MODELO_OLLAMA,
             messages=[
                 {
-                    'role': 'user',
-                    'content': f"""
-                    File: {file_path}
-                    Title: {title}
-                    Description: 
-                    {description}
-                    Full Diff:
-                    {diff_content}
-                    """
-                },
-            ]
+                    "role": "user",
+                    "content": f"""
+        Review this GitLab merge request diff.
+
+        ### FILE
+        {file_path}
+
+        ### TITLE
+        {title}
+
+        ### INSTRUCTIONS
+        - Focus ONLY on added (+) and removed (-) lines
+        - Ignore unchanged context
+        - Be concise
+        - Do not explain basics
+
+        ### DIFF
+        {diff_content}
+        """
+                }
+            ],
         )
 
         review_text = response['message']['content']
@@ -57,9 +79,10 @@ for mr_summary in mrs:
                 f"{review_text}\n\n---\n"
             )
 
-    if full_review != "**AI Code Review (Staff Engineer Mode)**\n\n":
+    if full_review != "**Ollama Code Review**\n\n":
         mr.notes.create({'body': full_review})
         print(f"Review comentado no MR #{mr.iid}!")
     else:
+        mr.notes.create({'body': "**Ollama Code Review**\n\n Nenhum erro crítico encontrado. "})
         print(
             f"Nada crítico encontrado para o MR #{mr.iid}. Comentário ignorado.")
